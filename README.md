@@ -1,10 +1,10 @@
 # AnimePiP
 
-An unofficial Android WebView wrapper that makes browser-based video playback easier to use with Android Picture-in-Picture.
+An unofficial Android WebView wrapper for Crunchyroll, focused on reliable Picture-in-Picture support.
 
 The app loads the Crunchyroll website inside an Android `WebView`, adds a native screen-relative PiP button, and uses Android's Picture-in-Picture APIs to keep video playing in a floating window.
 
-> **Disclaimer**  
+> Disclaimer  
 > AnimePiP is an unofficial personal project. It is not affiliated with, endorsed by, sponsored by, or associated with Crunchyroll, LLC or Sony Pictures Entertainment. Crunchyroll is a trademark of its respective owner.
 
 ## What it does
@@ -24,11 +24,12 @@ The app loads the Crunchyroll website inside an Android `WebView`, adds a native
 
 AnimePiP is not a downloader, DRM bypass, custom video player, or replacement Crunchyroll client.
 
-It does **not**:
+It does not:
 
 - download episodes
 - extract stream URLs
 - intercept license requests
+- intercept video segments
 - bypass Widevine or DRM
 - reimplement the Crunchyroll player
 - provide access to content without a valid Crunchyroll account
@@ -82,6 +83,19 @@ The debug APK will be under:
 app/build/outputs/apk/debug/
 ```
 
+## Release builds
+
+Release builds are produced by GitHub Actions when pushing a tag matching `v*`.
+
+Required repository secrets:
+
+```text
+ANDROID_KEYSTORE_BASE64
+ANDROID_KEYSTORE_PASSWORD
+ANDROID_KEY_ALIAS
+ANDROID_KEY_PASSWORD
+```
+
 ## Usage
 
 1. Install and open the app.
@@ -91,13 +105,17 @@ app/build/outputs/apk/debug/
 5. The app attempts to enter the web player's fullscreen mode, then Android PiP.
 6. Use the PiP controls for play/pause and short skips.
 
+## Privacy
+
+See [`PRIVACY.md`](PRIVACY.md).
+
 ## License
 
 This project is licensed under the MIT License.
 
 You are free to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the software, provided that the copyright notice and license text are included.
 
-See [LICENSE](LICENSE) for details.
+See [`LICENSE`](LICENSE) for details.
 
 ## Contributing
 

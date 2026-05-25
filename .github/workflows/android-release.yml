@@ -12,12 +12,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     name: Build Android app
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
 
     steps:
       - name: Check out repo
@@ -33,10 +36,24 @@ jobs:
       - name: Make Gradle executable
         run: chmod +x ./gradlew
 
+      - name: Validate release secrets
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          test -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}"
+          test -n "${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
+          test -n "${{ secrets.ANDROID_KEY_ALIAS }}"
+          test -n "${{ secrets.ANDROID_KEY_PASSWORD }}"
+
       - name: Decode release keystore
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > release-keystore.jks
+          printf '%s' "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > release-keystore.jks
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest
+
+      - name: Run Android lint
+        run: ./gradlew lintDebug
 
       - name: Build debug APK
         run: ./gradlew assembleDebug
@@ -58,10 +75,12 @@ jobs:
           sha256sum release-files/* > release-files/SHA256SUMS.txt
 
       - name: Upload debug APK artifact
+        if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v6
         with:
           name: AnimePiP-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
 
       - name: Upload release build artifacts
         if: startsWith(github.ref, 'refs/tags/v')
@@ -69,6 +88,7 @@ jobs:
         with:
           name: AnimePiP-release-${{ github.ref_name }}
           path: release-files/*
+          retention-days: 30
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
@@ -79,3 +99,7 @@ jobs:
             release-files/* \
             --title "AnimePiP ${GITHUB_REF_NAME}" \
             --notes "Release build for AnimePiP ${GITHUB_REF_NAME}."
+
+      - name: Remove release keystore
+        if: always()
+        run: rm -f release-keystore.jks

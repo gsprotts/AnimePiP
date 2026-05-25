@@ -7,12 +7,17 @@ android {
     namespace = "com.gprotts.animepip"
     compileSdk = 35
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "com.gprotts.animepip"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+
+        versionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+        versionName = System.getenv("GITHUB_REF_NAME") ?: "1.0-local"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -21,7 +26,7 @@ android {
         create("release") {
             val storeFilePath = System.getenv("SIGNING_STORE_FILE")
 
-            if (storeFilePath != null) {
+            if (!storeFilePath.isNullOrBlank()) {
                 storeFile = file(storeFilePath)
                 storePassword = System.getenv("SIGNING_STORE_PASSWORD") ?: ""
                 keyAlias = System.getenv("SIGNING_KEY_ALIAS") ?: ""
@@ -32,9 +37,11 @@ android {
 
     buildTypes {
         release {
+            // Keep disabled for now. This is a WebView/PiP wrapper and should be tested on-device
+            // before enabling R8/resource shrinking, because WebView/fullscreen behaviour is brittle.
             isMinifyEnabled = false
 
-            if (System.getenv("SIGNING_STORE_FILE") != null) {
+            if (!System.getenv("SIGNING_STORE_FILE").isNullOrBlank()) {
                 signingConfig = signingConfigs.getByName("release")
             }
 
@@ -44,6 +51,7 @@ android {
             )
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -60,12 +68,14 @@ dependencies {
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.compose.foundation)
-    
+
     testImplementation(libs.junit)
+
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

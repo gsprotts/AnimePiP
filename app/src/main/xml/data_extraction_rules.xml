@@ -1,9 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    This duplicate location should not be used by the manifest.
+
+    Prefer deleting app/src/main/xml entirely. If it remains in the repo,
+    keep it restrictive so it does not accidentally include app files.
+-->
 <data-extraction-rules>
     <cloud-backup>
-        <include domain="file" path="." />
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
     </cloud-backup>
+
     <device-transfer>
-        <include domain="file" path="." />
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
     </device-transfer>
 </data-extraction-rules>

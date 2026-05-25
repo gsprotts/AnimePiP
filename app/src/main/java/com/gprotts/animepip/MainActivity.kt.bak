@@ -65,8 +65,6 @@ class MainActivity : ComponentActivity() {
         private const val CR_DARK = "#141519"
         private const val CR_ORANGE = "#F47521"
         private const val CR_ORANGE_DIM = "#BF5A10"
-        private const val VIDEO_STATE_BRIDGE_NAME = "AndroidVideoState"
-        private const val MAX_VIDEO_STATE_JSON_LENGTH = 4096
     }
 
     // ── Views ─────────────────────────────────────────────────────────────────
@@ -90,7 +88,6 @@ class MainActivity : ComponentActivity() {
 
     private var videoIsPlaying = false
     private var videoAspectRatio = Rational(16, 9)
-    private val pendingUiCallbacks = mutableSetOf<Runnable>()
 
     /**
      * True only when the native Android PiP button has asked Webpage's own
@@ -137,7 +134,6 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        clearPendingUiCallbacks()
         try {
             unregisterReceiver(mediaReceiver)
         } catch (_: Exception) {
@@ -151,30 +147,6 @@ class MainActivity : ComponentActivity() {
         }
 
         super.onDestroy()
-    }
-
-    
-    private fun postDelayedSafely(delayMillis: Long, block: () -> Unit) {
-        if (!::webView.isInitialized) return
-
-        val callback = object : Runnable {
-            override fun run() {
-                pendingUiCallbacks.remove(this)
-                if (!isFinishing && !isDestroyed) {
-                    block()
-                }
-            }
-        }
-
-        pendingUiCallbacks.add(callback)
-        webView.postDelayed(callback, delayMillis)
-    }
-
-    private fun clearPendingUiCallbacks() {
-        if (::webView.isInitialized) {
-            pendingUiCallbacks.forEach { webView.removeCallbacks(it) }
-        }
-        pendingUiCallbacks.clear()
     }
 
     override fun onUserLeaveHint() {
@@ -220,13 +192,14 @@ class MainActivity : ComponentActivity() {
                 updatePipButtonVisibility()
             }
 
-            postDelayedSafely(250) {
+            webView.postDelayed({
                 js("if (window.__cvReportVideoState) window.__cvReportVideoState();")
                 updatePipButtonVisibility()
                 updatePipParams()
-            }
+            }, 250)
 
             updatePipParams()
+            Log.d(TAG, "Exited PiP")
             Log.d(TAG, "Exited PiP")
         }
     }
@@ -246,7 +219,9 @@ class MainActivity : ComponentActivity() {
             fullscreenContainer.invalidate()
             webView.invalidate()
 
-            postDelayedSafely(100) { updatePipParams() }
+            webView.postDelayed({
+                updatePipParams()
+            }, 100)
         } else {
             ViewCompat.requestApplyInsets(webContainer)
             updatePipButtonPosition()
@@ -535,7 +510,7 @@ class MainActivity : ComponentActivity() {
             javaScriptEnabled = true
             domStorageEnabled = true
             mediaPlaybackRequiresUserGesture = false
-            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             useWideViewPort = true
             loadWithOverviewMode = true
             builtInZoomControls = true
@@ -546,17 +521,9 @@ class MainActivity : ComponentActivity() {
 
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
-        webView.removeJavascriptInterface(VIDEO_STATE_BRIDGE_NAME)
+        webView.addJavascriptInterface(VideoStateBridge(), "AndroidVideoState")
 
         webView.webViewClient = object : WebViewClient() {
-            override fun onPageStarted(view: WebView, url: String, favicon: android.graphics.Bitmap?) {
-                clearPendingUiCallbacks()
-
-                if (!CrunchyrollUrlPolicy.isAllowedCrunchyrollUrl(url)) {
-                    view.removeJavascriptInterface(VIDEO_STATE_BRIDGE_NAME)
-                }
-            }
-
             override fun shouldOverrideUrlLoading(
                 view: WebView?,
                 request: WebResourceRequest?
@@ -564,20 +531,12 @@ class MainActivity : ComponentActivity() {
                 val url = request?.url?.toString() ?: return false
 
                 // Block external navigation attempts. Keep Webpage in the wrapper.
-                val allowed = CrunchyrollUrlPolicy.isAllowedCrunchyrollUrl(url)
-                if (!allowed) {
-                    view?.removeJavascriptInterface(VIDEO_STATE_BRIDGE_NAME)
-                }
-                return !allowed
+                return !url.contains("crunchyroll.com", ignoreCase = true)
             }
 
             override fun onPageFinished(view: WebView, url: String) {
-                if (CrunchyrollUrlPolicy.isAllowedCrunchyrollUrl(url)) {
-                    view.removeJavascriptInterface(VIDEO_STATE_BRIDGE_NAME)
-                    view.addJavascriptInterface(VideoStateBridge(), VIDEO_STATE_BRIDGE_NAME)
-                    injectVideoStateWatcher()
-                    injectBannerHider()
-                }
+                injectVideoStateWatcher()
+                injectBannerHider()
                 updatePipButtonVisibility()
             }
 
@@ -600,9 +559,7 @@ class MainActivity : ComponentActivity() {
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onConsoleMessage(msg: ConsoleMessage?): Boolean {
-                if (BuildConfig.DEBUG) {
-                    Log.d(TAG, "JS console: ${msg?.message()}")
-                }
+                Log.d(TAG, "JS console: ${msg?.message()}")
                 return true
             }
 
@@ -637,10 +594,10 @@ class MainActivity : ComponentActivity() {
                 if (pendingPipAfterPlayerFullscreen) {
                     // The player's own fullscreen control successfully produced a WebView
                     // fullscreen custom view. Now Android PiP can safely capture the video.
-                    postDelayedSafely(220) {
-                    pendingPipAfterPlayerFullscreen = false
-                    enterPipIfPossible()
-                }
+                    webView.postDelayed({
+                        pendingPipAfterPlayerFullscreen = false
+                        enterPipIfPossible()
+                    }, 220)
                 }
             }
 
@@ -777,10 +734,10 @@ class MainActivity : ComponentActivity() {
         """.trimIndent()
         )
 
-        postDelayedSafely(80) {
+        webView.postDelayed({
             sendFKeyToWebView()
             waitForPlayerFullscreenAfterHotkey()
-        }
+        }, 80)
     }
 
     private fun injectBannerHider() {
@@ -904,14 +861,7 @@ class MainActivity : ComponentActivity() {
     inner class VideoStateBridge {
         @JavascriptInterface
         fun update(json: String) {
-            if (json.length > MAX_VIDEO_STATE_JSON_LENGTH) {
-            if (BuildConfig.DEBUG) {
-                Log.w(TAG, "Rejected oversized video state JSON")
-            }
-            return
-        }
-
-        runOnUiThread {
+            runOnUiThread {
                 try {
                     val obj = JSONObject(json)
 
@@ -925,9 +875,7 @@ class MainActivity : ComponentActivity() {
                     updatePipButtonVisibility()
                     updatePipParams()
                 } catch (e: Exception) {
-                    if (BuildConfig.DEBUG) {
-                        Log.w(TAG, "Failed parsing video state", e)
-                    }
+                    Log.w(TAG, "Failed parsing video state: $json", e)
                     videoIsPlaying = false
                     videoAspectRatio = Rational(16, 9)
                     updatePipButtonVisibility()
@@ -941,7 +889,7 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 // Wait for WebChromeClient.onShowCustomView(). If it does not come,
                 // do not enter PiP: entering without default player fullscreen is the broken path.
-                postDelayedSafely(2500) {
+                webView.postDelayed({
                     if (pendingPipAfterPlayerFullscreen && customView == null) {
                         pendingPipAfterPlayerFullscreen = false
                         showSystemBars()
@@ -949,19 +897,18 @@ class MainActivity : ComponentActivity() {
                         updatePipButtonVisibility()
                         Log.w(TAG, "Player fullscreen click did not produce WebView fullscreen; not entering PiP")
                     }
-                }
+                }, 2500)
             }
         }
 
         @JavascriptInterface
         fun onPlayerFullscreenFailed(reason: String) {
             runOnUiThread {
-                val safeReason = reason.take(200)
                 pendingPipAfterPlayerFullscreen = false
                 showSystemBars()
                 ViewCompat.requestApplyInsets(webContainer)
                 updatePipButtonVisibility()
-                Log.w(TAG, "Player fullscreen failed; not entering PiP: $safeReason")
+                Log.w(TAG, "Player fullscreen failed; not entering PiP: $reason")
             }
         }
     }
