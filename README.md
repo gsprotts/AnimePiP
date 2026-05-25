@@ -130,3 +130,10 @@ Useful areas for improvement:
 ## Legal note
 
 This project is intended for personal experimentation with Android WebView and Picture-in-Picture behaviour. Use it responsibly and respect the terms of the services you access through it.
+
+## Security notes
+
+`mixedContentMode` is set to `MIXED_CONTENT_NEVER_ALLOW` and `usesCleartextTraffic` is disabled.
+This means the WebView will silently block any resource (images, subtitles, scripts) served over
+plain HTTP rather than HTTPS. If content mysteriously stops loading after a Crunchyroll player
+update, this is the first thing to check.

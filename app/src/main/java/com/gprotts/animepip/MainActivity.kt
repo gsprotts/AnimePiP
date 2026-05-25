@@ -81,6 +81,8 @@ class MainActivity : ComponentActivity() {
     private var customView: View? = null
     private var customViewCallback: WebChromeClient.CustomViewCallback? = null
 
+    private val  videoStateBridge = VideoStateBridge()
+
     // ── Layout state ──────────────────────────────────────────────────────────
 
     private var safeRightInset = 0
@@ -90,7 +92,7 @@ class MainActivity : ComponentActivity() {
 
     private var videoIsPlaying = false
     private var videoAspectRatio = Rational(16, 9)
-    private val pendingUiCallbacks = mutableSetOf<Runnable>()
+    private val pendingUiCallbacks = java.util.concurrent.CopyOnWriteArraySet<Runnable>()
 
     /**
      * True only when the native Android PiP button has asked Webpage's own
@@ -573,8 +575,7 @@ class MainActivity : ComponentActivity() {
 
             override fun onPageFinished(view: WebView, url: String) {
                 if (CrunchyrollUrlPolicy.isAllowedCrunchyrollUrl(url)) {
-                    view.removeJavascriptInterface(VIDEO_STATE_BRIDGE_NAME)
-                    view.addJavascriptInterface(VideoStateBridge(), VIDEO_STATE_BRIDGE_NAME)
+                    view.addJavascriptInterface(videoStateBridge, VIDEO_STATE_BRIDGE_NAME)
                     injectVideoStateWatcher()
                     injectBannerHider()
                 }
@@ -677,52 +678,16 @@ class MainActivity : ComponentActivity() {
     }
 
     // ── JS injections ─────────────────────────────────────────────────────────
+    private val injectVideoStateWatcher by lazy {
+        assets.open("inject_video_state_watcher.js").bufferedReader().readText()
+    }
 
     private fun injectVideoStateWatcher() {
-        js(
-            """
-            (function() {
-                if (window.__cvVideoWatcherInstalled) return;
-                window.__cvVideoWatcherInstalled = true;
+        js(injectVideoStateWatcher)
+    }
 
-                window.__getBestVideo = function() {
-                    var videos = Array.from(document.querySelectorAll('video'));
-                    if (!videos.length) return null;
-
-                    return videos.sort(function(a, b) {
-                        function score(v) {
-                            return (!v.paused ? 100 : 0)
-                                + ((v.readyState || 0) * 10)
-                                + ((v.videoWidth  || 0) * (v.videoHeight || 0) > 0 ? 20 : 0)
-                                + ((v.offsetWidth || 0) * (v.offsetHeight || 0) > 0 ? 10 : 0);
-                        }
-                        return score(b) - score(a);
-                    })[0];
-                };
-
-                window.__cvReportVideoState = function() {
-                    var v = window.__getBestVideo();
-
-                    AndroidVideoState.update(JSON.stringify(v ? {
-                        playing: !v.paused && !v.ended && v.readyState > 1,
-                        width:   v.videoWidth  || 16,
-                        height:  v.videoHeight || 9
-                    } : {
-                        playing: false,
-                        width: 16,
-                        height: 9
-                    }));
-                };
-
-                ['play','pause','ended','loadedmetadata','durationchange','resize'].forEach(function(e) {
-                    document.addEventListener(e, window.__cvReportVideoState, true);
-                });
-
-                setInterval(window.__cvReportVideoState, 1000);
-                window.__cvReportVideoState();
-            })();
-            """.trimIndent()
-        )
+    private val fullscreenVideoPlayer by lazy {
+        assets.open("fullscreen_video_player.js").bufferedReader().readText()
     }
 
     /**
@@ -744,38 +709,7 @@ class MainActivity : ComponentActivity() {
         clearAllPaddingForVideoSurface()
 
         // Focus the player/document, then send Webpage's own fullscreen hotkey.
-        js(
-            """
-        (function(){
-            var v = window.__getBestVideo && window.__getBestVideo();
-
-            if (v) {
-                var root =
-                    v.closest('[data-testid="player-controls-root"]') ||
-                    v.closest('[data-testid*="player"]') ||
-                    v.closest('[class*="VideoPlayer"]') ||
-                    v.closest('[class*="video-player"]') ||
-                    v.closest('[class*="vilos"]') ||
-                    v.closest('[class*="Vilos"]') ||
-                    v.closest('[class*="player"]') ||
-                    v.closest('[class*="Player"]') ||
-                    document.body;
-
-                if (root && root.focus) {
-                    root.setAttribute('tabindex', '-1');
-                    root.focus();
-                }
-
-                if (v.focus) {
-                    v.setAttribute('tabindex', '-1');
-                    v.focus();
-                }
-            }
-
-            return "focused-for-f-key";
-        })();
-        """.trimIndent()
-        )
+        js(fullscreenVideoPlayer)
 
         postDelayedSafely(80) {
             sendFKeyToWebView()
@@ -783,120 +717,33 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun injectBannerHider() {
-        js(
-            """
-            (function() {
-                if (window.__bannerHiderInstalled) return;
-                window.__bannerHiderInstalled = true;
-
-                var SELECTORS = [
-                    '.app-banner', '.open-app-btn',
-                    '[class*="AppBanner"]', '[class*="AppRedirect"]',
-                    '[class*="MobileAppBanner"]', '.erc-mobile-app-banner',
-                    '.mobile-app-prompt', '.vilos-mobile-app-banner'
-                ];
-
-                function hide() {
-                    SELECTORS.forEach(function(sel) {
-                        document.querySelectorAll(sel).forEach(function(el) {
-                            if (el && el.style) {
-                                el.style.setProperty('display','none','important');
-                                el.style.setProperty('visibility','hidden','important');
-                            }
-                        });
-                    });
-                }
-
-                hide();
-                new MutationObserver(hide).observe(document.documentElement, {
-                    childList: true,
-                    subtree: true
-                });
-            })();
-            """.trimIndent()
-        )
+    private val hideBanner by lazy {
+        assets.open("hidebanner.js").bufferedReader().readText()
     }
 
+    private fun injectBannerHider() {
+        js(hideBanner)
+    }
+
+    private val pipContainCss by lazy {
+        assets.open("pip.css").bufferedReader().readText()
+    }
+    
+    private val injectPipCssScript by lazy {
+        assets.open("inject_pip_css.js").bufferedReader().readText()
+    }
+    
     private fun injectPipContainCss() {
-        js(
-            """
-        (function(){
-            var v = window.__getBestVideo && window.__getBestVideo();
-            if (!v) return "no-video";
+        js("window.__pipCss = `$pipContainCss`;")
+        js(injectPipCssScript)
+    }
 
-            document.querySelectorAll('video[data-cv-pip-contain="1"]').forEach(function(old) {
-                old.removeAttribute('data-cv-pip-contain');
-            });
-
-            v.setAttribute('data-cv-pip-contain', '1');
-
-            var style = document.getElementById('__cv_pip_contain_style');
-            if (!style) {
-                style = document.createElement('style');
-                style.id = '__cv_pip_contain_style';
-                document.head.appendChild(style);
-            }
-
-            style.textContent = `
-                html, body {
-                    margin: 0 !important;
-                    padding: 0 !important;
-                    width: 100vw !important;
-                    height: 100vh !important;
-                    min-width: 0 !important;
-                    min-height: 0 !important;
-                    overflow: hidden !important;
-                    background: #000 !important;
-                }
-
-                body * {
-                    min-width: 0 !important;
-                    min-height: 0 !important;
-                    box-sizing: border-box !important;
-                }
-
-                video[data-cv-pip-contain="1"] {
-                    position: fixed !important;
-                    left: 0 !important;
-                    top: 0 !important;
-                    right: 0 !important;
-                    bottom: 0 !important;
-                    width: 100vw !important;
-                    height: 100vh !important;
-                    max-width: 100vw !important;
-                    max-height: 100vh !important;
-                    min-width: 0 !important;
-                    min-height: 0 !important;
-                    object-fit: contain !important;
-                    object-position: center center !important;
-                    transform: none !important;
-                    background: #000 !important;
-                    z-index: 2147483647 !important;
-                }
-            `;
-
-            return "pip-contain-css-applied-strong";
-        })();
-        """.trimIndent()
-        )
+    private val removePipCssScript by lazy {
+        assets.open("remove_pip_css.js").bufferedReader().readText()
     }
 
     private fun removePipContainCss() {
-        js(
-            """
-            (function(){
-                var style = document.getElementById('__cv_pip_contain_style');
-                if (style) style.remove();
-
-                document.querySelectorAll('video[data-cv-pip-contain="1"]').forEach(function(v) {
-                    v.removeAttribute('data-cv-pip-contain');
-                });
-
-                return "pip-contain-css-removed";
-            })();
-            """.trimIndent()
-        )
+        js(removePipCssScript)
     }
 
     // ── JS bridge ─────────────────────────────────────────────────────────────
@@ -905,13 +752,13 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface
         fun update(json: String) {
             if (json.length > MAX_VIDEO_STATE_JSON_LENGTH) {
-            if (BuildConfig.DEBUG) {
-                Log.w(TAG, "Rejected oversized video state JSON")
+                if (BuildConfig.DEBUG) {
+                    Log.w(TAG, "Rejected oversized video state JSON")
+                }
+                return
             }
-            return
-        }
 
-        runOnUiThread {
+            runOnUiThread {
                 try {
                     val obj = JSONObject(json)
 
@@ -1068,29 +915,12 @@ class MainActivity : ComponentActivity() {
 
     // ── PiP commands ──────────────────────────────────────────────────────────
 
+    private val playPauseScript by lazy {
+        assets.open("playpause.js").bufferedReader().readText()
+    }
+
     private fun togglePlayPauseFromPip() {
-        js(
-            """
-        (function(){
-            var v = window.__getBestVideo && window.__getBestVideo();
-            if (!v) return "no-video";
-
-            if (v.paused) {
-                v.play();
-            } else {
-                v.pause();
-            }
-
-            setTimeout(function(){
-                if (window.__cvReportVideoState) {
-                    window.__cvReportVideoState();
-                }
-            }, 100);
-
-            return v.paused ? "pause" : "play";
-        })()
-        """.trimIndent()
-        )
+        js(playPauseScript)
 
         // Optimistically flip the icon immediately.
         videoIsPlaying = !videoIsPlaying
@@ -1121,277 +951,12 @@ class MainActivity : ComponentActivity() {
         }, 500)
     }
 
+    private val nativeControlScript by lazy {
+        assets.open("navigation_controls.js").bufferedReader().readText()
+    }
+    
     private fun runWebpageNativeControl(action: String) {
-        js(
-            """
-            (async function(){
-                function sleep(ms) {
-                    return new Promise(function(resolve) {
-                        setTimeout(resolve, ms);
-                    });
-                }
-
-                function textOf(el) {
-                    if (!el) return "";
-
-                    return [
-                        el.getAttribute("aria-label"),
-                        el.getAttribute("title"),
-                        el.getAttribute("data-testid"),
-                        el.getAttribute("data-test-id"),
-                        el.className,
-                        el.textContent
-                    ].filter(Boolean).join(" ").toLowerCase();
-                }
-
-                function visible(el) {
-                    if (!el) return false;
-
-                    var rect = el.getBoundingClientRect();
-                    var style = window.getComputedStyle(el);
-
-                    return rect.width > 0 &&
-                        rect.height > 0 &&
-                        style.visibility !== "hidden" &&
-                        style.display !== "none" &&
-                        style.opacity !== "0";
-                }
-
-                function clickElement(el) {
-                    if (!el) return false;
-
-                    try {
-                        el.scrollIntoView({
-                            block: "center",
-                            inline: "center",
-                            behavior: "instant"
-                        });
-                    } catch (e) {}
-
-                    try {
-                        var rect = el.getBoundingClientRect();
-                        var x = rect.left + rect.width / 2;
-                        var y = rect.top + rect.height / 2;
-
-                        ["pointerdown", "mousedown", "pointerup", "mouseup", "click"].forEach(function(type) {
-                            var event;
-
-                            if (type.indexOf("pointer") === 0 && window.PointerEvent) {
-                                event = new PointerEvent(type, {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    composed: true,
-                                    clientX: x,
-                                    clientY: y,
-                                    pointerId: 1,
-                                    pointerType: "touch",
-                                    isPrimary: true
-                                });
-                            } else {
-                                event = new MouseEvent(type, {
-                                    bubbles: true,
-                                    cancelable: true,
-                                    composed: true,
-                                    clientX: x,
-                                    clientY: y
-                                });
-                            }
-
-                            el.dispatchEvent(event);
-                        });
-
-                        if (typeof el.click === "function") {
-                            el.click();
-                        }
-
-                        return true;
-                    } catch (e) {
-                        try {
-                            el.click();
-                            return true;
-                        } catch (e2) {
-                            return false;
-                        }
-                    }
-                }
-
-                function getVideo() {
-                    return window.__getBestVideo && window.__getBestVideo();
-                }
-
-                function getPlayerRoot(v) {
-                    return (
-                        v.closest('[data-testid*="player"]') ||
-                        v.closest('[class*="VideoPlayer"]') ||
-                        v.closest('[class*="video-player"]') ||
-                        v.closest('[class*="vilos"]') ||
-                        v.closest('[class*="Vilos"]') ||
-                        v.closest('[class*="player"]') ||
-                        v.closest('[class*="Player"]') ||
-                        document
-                    );
-                }
-
-                function showControls(root, v) {
-                    try {
-                        clickElement(v);
-                        clickElement(root);
-                    } catch (e) {}
-                }
-
-                function findButton(root, wanted, unwanted) {
-                    var candidates = Array.from(root.querySelectorAll(
-                        'button, [role="button"], [aria-label], [title], [data-testid], [data-test-id]'
-                    )).filter(visible);
-
-                    var best = null;
-                    var bestScore = 0;
-
-                    candidates.forEach(function(el) {
-                        var t = textOf(el);
-
-                        if (!t) return;
-
-                        for (var i = 0; i < unwanted.length; i++) {
-                            if (t.indexOf(unwanted[i]) !== -1) {
-                                return;
-                            }
-                        }
-
-                        var score = 0;
-
-                        wanted.forEach(function(word) {
-                            if (t.indexOf(word) !== -1) {
-                                score += 10;
-                            }
-                        });
-
-                        if (el.tagName && el.tagName.toLowerCase() === "button") {
-                            score += 3;
-                        }
-
-                        var rect = el.getBoundingClientRect();
-                        if (rect.top > window.innerHeight * 0.45) {
-                            score += 2;
-                        }
-
-                        if (score > bestScore) {
-                            bestScore = score;
-                            best = el;
-                        }
-                    });
-
-                    return bestScore > 0 ? best : null;
-                }
-
-                function dispatchHotkey(root, key, keyCode) {
-                    try {
-                        if (root && root.focus) root.focus();
-
-                        ["keydown", "keyup"].forEach(function(type) {
-                            var event = new KeyboardEvent(type, {
-                                key: key,
-                                code: key,
-                                keyCode: keyCode,
-                                which: keyCode,
-                                bubbles: true,
-                                cancelable: true
-                            });
-
-                            root.dispatchEvent(event);
-                            document.dispatchEvent(event);
-                            window.dispatchEvent(event);
-                        });
-
-                        return true;
-                    } catch (e) {
-                        return false;
-                    }
-                }
-
-                var action = "$action";
-                var v = getVideo();
-
-                if (!v) {
-                    return "no-video";
-                }
-
-                var root = getPlayerRoot(v);
-
-                showControls(root, v);
-                await sleep(150);
-
-                if (action === "playPause") {
-                    var playPauseButton = findButton(
-                        root,
-                        ["play", "pause"],
-                        ["replay", "skip", "back", "forward", "next", "previous", "fullscreen", "settings"]
-                    );
-
-                    if (playPauseButton && clickElement(playPauseButton)) {
-                        await sleep(150);
-                        if (window.__cvReportVideoState) window.__cvReportVideoState();
-                        return "native-play-pause-click";
-                    }
-
-                    try {
-                        if (v.paused) {
-                            await v.play();
-                        } else {
-                            v.pause();
-                        }
-
-                        if (window.__cvReportVideoState) window.__cvReportVideoState();
-                        return "video-play-pause-fallback";
-                    } catch (e) {
-                        return "play-pause-failed:" + String(e);
-                    }
-                }
-
-                if (action === "back") {
-                    var backButton = findButton(
-                        root,
-                        ["back", "rewind", "replay", "10", "10s", "10 seconds", "skip back"],
-                        ["forward", "next", "fullscreen", "settings", "volume", "mute"]
-                    );
-
-                    if (backButton && clickElement(backButton)) {
-                        await sleep(250);
-                        if (window.__cvReportVideoState) window.__cvReportVideoState();
-                        return "native-back-click";
-                    }
-
-                    dispatchHotkey(root, "ArrowLeft", 37);
-                    await sleep(250);
-
-                    if (window.__cvReportVideoState) window.__cvReportVideoState();
-                    return "back-hotkey-fallback";
-                }
-
-                if (action === "forward") {
-                    var forwardButton = findButton(
-                        root,
-                        ["forward", "10", "10s", "10 seconds", "skip forward"],
-                        ["back", "rewind", "replay", "previous", "fullscreen", "settings", "volume", "mute"]
-                    );
-
-                    if (forwardButton && clickElement(forwardButton)) {
-                        await sleep(250);
-                        if (window.__cvReportVideoState) window.__cvReportVideoState();
-                        return "native-forward-click";
-                    }
-
-                    dispatchHotkey(root, "ArrowRight", 39);
-                    await sleep(250);
-
-                    if (window.__cvReportVideoState) window.__cvReportVideoState();
-                    return "forward-hotkey-fallback";
-                }
-
-                return "unknown-action";
-            })()
-            """.trimIndent()
-        )
+        js(nativeControlScript.replace("\$action", action))
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
