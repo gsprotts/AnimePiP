@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.animepip"
+    namespace = "com.gprotts.animepip"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.example.animepip"
+        applicationId = "com.gprotts.animepip"
         minSdk = 30
         targetSdk = 35
         versionCode = 1
