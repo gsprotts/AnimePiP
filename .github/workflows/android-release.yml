@@ -1,0 +1,83 @@
+name: Android CI/CD
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Android app
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+
+      - name: Decode release keystore
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode > release-keystore.jks
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug
+
+      - name: Build release APK and AAB
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          SIGNING_STORE_FILE: ${{ github.workspace }}/release-keystore.jks
+          SIGNING_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease bundleRelease
+
+      - name: Upload debug APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnimePiP-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+
+      - name: Prepare release files
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          mkdir -p release-files
+          cp app/build/outputs/apk/release/*.apk release-files/AnimePiP-${GITHUB_REF_NAME}.apk
+          cp app/build/outputs/bundle/release/*.aab release-files/AnimePiP-${GITHUB_REF_NAME}.aab
+          sha256sum release-files/* > release-files/SHA256SUMS.txt
+
+      - name: Upload release build artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v4
+        with:
+          name: AnimePiP-release-${{ github.ref_name }}
+          path: release-files/*
+
+      - name: Create GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            release-files/* \
+            --title "AnimePiP ${GITHUB_REF_NAME}" \
+            --notes "Release build for AnimePiP ${GITHUB_REF_NAME}."
