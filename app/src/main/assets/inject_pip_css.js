@@ -15,6 +15,6 @@
         document.head.appendChild(style);
     }
 
-    window.__pipCss || "";
+    style.textContent = window.__pipCss || "";
     return "pip-contain-css-applied-strong";
 })();
